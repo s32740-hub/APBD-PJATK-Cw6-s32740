@@ -4,5 +4,6 @@ namespace cw7.Services;
 
 public interface IAppointmentService
 {
-    Task<IEnumerable<AppointmentDetailsDto>> GetAllAppointments();
+    Task<IEnumerable<AppointmentListDto>> GetAllAppointments();
+    Task<AppointmentDetailsDto> GetAppointmentById(int idAppointment);
 }

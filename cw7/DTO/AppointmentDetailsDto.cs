@@ -1,12 +1,11 @@
 ﻿namespace cw7.DTO;
 public record AppointmentDetailsDto
 {
-    public int IdAppointment { get; init; }
-    public string PatientName { get; init; }
-    public int IdDoctor { get; init; }
+    public string PatientName { get; init; } = null!;
+    public string Email { get; init; } = null!;
+    public string PhoneNumber { get; init; } = null!;
+    public string DoctorName { get; init; } = null!;
+    public string LicenseNumber { get; init; } = null!;
     public DateTime AppointmentDate { get; init; }
-    public string Status { get; init; } = null!;
-    public string Reason { get; init; } = null!;
     public string? InternalNotes { get; init; }
-    public DateTime CreatedAt { get; init; }
 }

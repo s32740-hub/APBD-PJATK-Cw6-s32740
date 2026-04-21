@@ -1,10 +1,12 @@
 ﻿namespace cw7.DTO;
 public class AppointmentListDto
 {
-    public int IdAppointment { get; set; }
-    public DateTime AppointmentDate { get; set; }
-    public string Status { get; set; } = string.Empty;
-    public string Reason { get; set; } = string.Empty;
-    public string PatientFullName { get; set; } = string.Empty;
-    public string PatientEmail { get; set; } = string.Empty;
+    public int IdAppointment { get; init; }
+    public string PatientName { get; init; }
+    public int IdDoctor { get; init; }
+    public DateTime AppointmentDate { get; init; }
+    public string Status { get; init; } = null!;
+    public string Reason { get; init; } = null!;
+    public string? InternalNotes { get; init; }
+    public DateTime CreatedAt { get; init; }
 }
