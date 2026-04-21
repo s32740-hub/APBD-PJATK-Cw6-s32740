@@ -28,7 +28,7 @@ public class AppointmentService(IConfiguration configuration):IAppointmentServic
 
         if (patientLastName != null)
         {
-            conditions.Add("PatientLastName = @patientLastName");
+            conditions.Add("p.LastName = @patientLastName");
             parameters.Add(new SqlParameter("@patientLastName", patientLastName));
         }
 
@@ -122,15 +122,16 @@ public class AppointmentService(IConfiguration configuration):IAppointmentServic
                               SELECT 
                                 (SELECT COUNT(*) FROM Doctors 
                                                  WHERE IdDoctor = @idDoctor 
-                                                   And IsActive
-                                                 And NOT EXIST (
+                                                   And IsActive = 1
+                                                 And NOT EXISTS (
                                                          SELECT 1 From Appointments
                                                             Where IdDoctor = @idDoctor AND AppointmentDate = @Date
                                                          )
-                                                 ) AS DoctorExists,
-                                (SELECT COUNT(*) FROM Patients WHERE IdPatient = @idPatient And IsActive) AS PatientExist,
-                                (select 1 from Appointments where @Date >= GETDATE()) AS DateCondition
+                                ) AS DoctorExists,
+                                (SELECT COUNT(*) FROM Patients WHERE IdPatient = @idPatient And IsActive = 1) AS PatientExists,
+                                (SELECT CASE WHEN @Date > GETDATE() THEN 1 ELSE 0 END) AS DateCondition
                               """;
+        command.Parameters.AddWithValue("@Notes", (object?)appointment.InternalNotes ?? DBNull.Value);
         command.Parameters.AddWithValue("@idDoctor", appointment.IdDoctor);
         command.Parameters.AddWithValue("@Date", appointment.AppointmentDate);
         command.Parameters.AddWithValue("@idPatient", appointment.IdPatient);
@@ -160,7 +161,7 @@ public class AppointmentService(IConfiguration configuration):IAppointmentServic
             command.Parameters.AddWithValue("@IdD", appointment.IdDoctor);
             command.Parameters.AddWithValue("@Date", appointment.AppointmentDate);
             command.Parameters.AddWithValue("@Reason", appointment.Reason);
-            command.Parameters.AddWithValue("@Notes", appointment.InternalNotes);
+            command.Parameters.AddWithValue("@Notes", (object?)appointment.InternalNotes ?? DBNull.Value);
             var newId = (int)await command.ExecuteScalarAsync(cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
@@ -180,9 +181,9 @@ public class AppointmentService(IConfiguration configuration):IAppointmentServic
         command.Connection = connection;
         await connection.OpenAsync(cancellationToken);
         command.CommandText = """
-                               SELECT (select 1 from appointments where IdAppointment = @idAppointment) AS IsExisting,
-                                      (select 1 from appointments where IdAppointment = @idAppointment and Status != 'Completed') AS IsCompleted
-                                      From Appointments
+                               SELECT (SELECT COUNT(*) FROM appointments WHERE IdAppointment = @idAppointment) AS IsExisting,
+                               (SELECT COUNT(*) FROM appointments WHERE IdAppointment = @idAppointment AND Status = 'Completed') AS IsCompleted
+                               
                                """;
         command.Parameters.AddWithValue("@IdAppointment", idAppointment);
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -192,8 +193,7 @@ public class AppointmentService(IConfiguration configuration):IAppointmentServic
                 var isExisting = (int)reader["IsExisting"] > 0;
                 var IsCompleted = (int)reader["IsCompleted"] > 0;
 
-                if (!isExisting) throw new NotFoundException("Appointment does not exist");
-                if (!IsCompleted) throw new BadConditionException("Appointment is completed");
+                if (IsCompleted) throw new BadConditionException("Cannot delete a completed appointment");
             }
         }
         command.Parameters.Clear();
@@ -217,65 +217,71 @@ public class AppointmentService(IConfiguration configuration):IAppointmentServic
         CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(configuration.GetConnectionString("Default"));
+        await connection.OpenAsync(cancellationToken);
+
         await using var command = new SqlCommand();
         command.Connection = connection;
-        await connection.OpenAsync(cancellationToken);
+
         command.CommandText = """
-                              SELECT (select 1 from appointments where IdAppointment = @idAppointment) AS IsExisting,
-                                     (select 1 from appointments where IdAppointment = @idAppointment and Status == 'Completed' and @Date != AppointmentDate) AS IsCompleted,
-                                     (SELECT COUNT(*) FROM Doctors 
-                                               WHERE IdDoctor = @idDoctor 
-                                                 And IsActive
-                                               And NOT EXIST (
-                                                       SELECT 1 From Appointments
-                                                          Where IdDoctor = @idDoctor AND AppointmentDate = @Date
-                                                       )
-                                               ) AS DoctorExists,
-                                    (SELECT COUNT(*) FROM Patients WHERE IdPatient = @idPatient And IsActive) AS PatientExist,
-                                    (select 1 from Appointments where @Status in ('Scheduled', 'Completed', 'Cancelled')) as StatusCondition,
-                                    (select 1 from Appointments where @Date >= GETDATE() and NOT exists(
-                                    select 1 from Appointments where IdDoctor = @idDoctor and @Date != AppointmentDate
-                                    ) AS DateCondition
-                                     From Appointments
+                              SELECT
+                                (SELECT CASE WHEN @Date > GETDATE() THEN 1 ELSE 0 END) AS DateCondition,
+                                (SELECT COUNT(*) FROM Appointments WHERE IdAppointment = @IdApp) AS IsExisting,
+                                (SELECT COUNT(*) FROM Appointments WHERE IdAppointment = @IdApp AND Status = 'Completed') AS IsCompleted,
+                                (SELECT COUNT(*) FROM Patients WHERE IdPatient = @IdPat AND IsActive = 1) AS PatientExist,
+                                (SELECT CASE WHEN @Status IN ('Scheduled','Completed','Cancelled') THEN 1 ELSE 0 END) AS StatusCondition,
+                                (SELECT COUNT(*) FROM Doctors WHERE IdDoctor = @IdDoc AND IsActive = 1) AS DoctorExists,
+                                (SELECT CASE WHEN NOT EXISTS (
+                                    SELECT 1 FROM Appointments 
+                                    WHERE IdDoctor = @IdDoc AND AppointmentDate = @Date AND IdAppointment != @IdApp
+                                ) THEN 1 ELSE 0 END) AS NoConflict
                               """;
-        command.Parameters.AddWithValue("@IdAppointment", id);
-        command.Parameters.AddWithValue("@IdDoctor", appointment.IdDoctor);
+
+        command.Parameters.AddWithValue("@IdApp", id);
+        command.Parameters.AddWithValue("@IdDoc", appointment.IdDoctor);
         command.Parameters.AddWithValue("@Date", appointment.AppointmentDate);
-        command.Parameters.AddWithValue("@idPatient", appointment.IdPatient);
+        command.Parameters.AddWithValue("@IdPat", appointment.IdPatient);
+        command.Parameters.AddWithValue("@Status", appointment.Status);
+
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             if (await reader.ReadAsync(cancellationToken))
             {
-                var isExisting = (int)reader["IsExisting"] > 0;
-                var IsCompleted = (int)reader["IsCompleted"] > 0;
-                var DoctorExists = (int)reader["DoctorExists"] > 0;
-                var PatientExist = (int)reader["PatientExist"] > 0;
-                var StatusCondition = (int)reader["StatusCondition"] > 0;
-                var DateCondition = (int)reader["DateCondition"] > 0;
-
-                if (!isExisting) throw new NotFoundException("Appointment does not exist");
-                if (!IsCompleted) throw new BadConditionException("Appointment is not completed, you can't change the Date");
-                if (!DoctorExists) throw new NotFoundException("Doctor does not exist or is not active");
-                if (!PatientExist) throw new NotFoundException("Patient does not exist or is not active");
-                if (!StatusCondition) throw new BadConditionException("Bad Status");
-                if (!DateCondition) throw new BadConditionException("Bad Date");
+                if ((int)reader["IsExisting"] == 0) throw new NotFoundException("Appointment does not exist");
+                if ((int)reader["IsCompleted"] == 1)
+                    throw new BadConditionException("Cannot update a completed appointment");
+                if ((int)reader["DoctorExists"] == 0)
+                    throw new NotFoundException("Doctor does not exist or is not active");
+                if ((int)reader["PatientExist"] == 0)
+                    throw new NotFoundException("Patient does not exist or is not active");
+                if ((int)reader["StatusCondition"] == 0) throw new BadConditionException("Invalid Status name");
+                if ((int)reader["DateCondition"] == 0)
+                    throw new BadConditionException("New date cannot be in the past");
+                if ((int)reader["NoConflict"] == 0)
+                    throw new BadConditionException("Doctor has a conflict at this time");
             }
         }
+
         command.Parameters.Clear();
         command.CommandText = """
-                              update appointments
-                              set 
+                              UPDATE Appointments
+                              SET 
                                   IdDoctor = @IdD,
                                   AppointmentDate = @Date,
                                   Status = @Status,
                                   Reason = @Reason,
-                                  InternalNotes = @Notes
+                                  InternalNotes = @Notes,
+                                  IdPatient = @IdP
+                              WHERE IdAppointment = @IdApp
                               """;
+
+        command.Parameters.AddWithValue("@IdApp", id);
         command.Parameters.AddWithValue("@IdD", appointment.IdDoctor);
         command.Parameters.AddWithValue("@Date", appointment.AppointmentDate);
         command.Parameters.AddWithValue("@Status", appointment.Status);
         command.Parameters.AddWithValue("@Reason", appointment.Reason);
-        command.Parameters.AddWithValue("@Notes", appointment.InternalNotes);
+        command.Parameters.AddWithValue("@IdP", appointment.IdPatient);
+        command.Parameters.AddWithValue("@Notes", (object?)appointment.InternalNotes ?? DBNull.Value);
+
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

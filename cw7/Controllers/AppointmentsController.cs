@@ -40,8 +40,8 @@ public class AppointmentsController(IAppointmentService appointmentService):Cont
     {
         try
         {
-            var result = await appointmentService.CreateAppointment(appointment);
-            return Ok(result);
+            var result = await appointmentService.CreateAppointment(appointment, cancellationToken);
+            return StatusCode(201, result);
         }
         catch (BadConditionException ex)
         {
@@ -84,6 +84,36 @@ public class AppointmentsController(IAppointmentService appointmentService):Cont
                     StatusCode = 409
                 }
             );
+        }
+    }
+
+    [HttpDelete("{idAppointment}")]
+    public async Task<IActionResult> Delete([FromRoute] int idAppointment,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await appointmentService.RemoveAppointment(idAppointment, cancellationToken);
+            return NoContent();
+        }
+        catch (NotFoundException ex)
+        {
+            return StatusCode(404, new ErrorResponseDto
+                {
+                    Message = "Error Not Found",
+                    Details = ex.Message,
+                    StatusCode = 404
+                }
+            );
+        }
+        catch (BadConditionException ex)
+        {
+            return StatusCode(409, new ErrorResponseDto
+            {
+                Message = "Conflict",
+                Details = ex.Message,
+                StatusCode = 409
+            });
         }
     }
 }

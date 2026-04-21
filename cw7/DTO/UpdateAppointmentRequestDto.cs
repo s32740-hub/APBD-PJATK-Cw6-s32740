@@ -5,6 +5,8 @@ namespace cw7.DTO;
 public record UpdateAppointmentRequestDto
 {
     [Required]
+    public int IdAppointment { get; init; }
+    [Required]
     public int IdDoctor { get; init; }
     [Required]
     public int IdPatient { get; init; }
